@@ -28,13 +28,15 @@ class PhysiologicalFeature(models.Model):
     window_length_sec = models.DecimalField(
         max_digits=5, 
         decimal_places=2, 
-        default=30.00
+        default=30.0,
     )
 
     hrv_rmssd = models.DecimalField(max_digits=10, decimal_places=5, null=True, blank=True)
     mean_hr = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     eda_mean = models.DecimalField(max_digits=10, decimal_places=5, null=True, blank=True)
-    acc_std_chest_x = models.DecimalField(max_digits=10, decimal_places=5, null=True, blank=True)
+    
+    acc_std_x = models.DecimalField(max_digits=10, decimal_places=5, null=True, blank=True) 
+    bvp_mean = models.DecimalField(max_digits=10, decimal_places=5, null=True, blank=True) 
 
     model_predicted_stress_prob = models.DecimalField(
         max_digits=4, 
