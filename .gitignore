@@ -1,5 +1,5 @@
 venv/
 .env
-
+*.pyc
 *.DS_Store
 WESAD/
