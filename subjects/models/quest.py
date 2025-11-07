@@ -1,22 +1,16 @@
-# models.py (Consolidated Self-Report Model without comments)
-
 from django.db import models
-from django.core.validators import MinValueValidator, MaxValueValidator
+from . import Subject, AffectCondition
 
-from .subject import Subject
-# Assuming Subject and AffectCondition models exist and are imported.
-
-# --- Scale Definitions ---
 PANAS_SSSQ_SCALE = [(i, str(i)) for i in range(1, 6)] 
 STAI_SCALE = [(i, str(i)) for i in range(1, 5)] 
 SAM_SCALE = [(i, str(i)) for i in range(1, 10)] 
 
 class SelfReportScore(models.Model):
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE)
-    # condition = models.ForeignKey(
-    #     AffectCondition, 
-    #     on_delete=models.PROTECT,
-    # )
+    condition = models.ForeignKey(
+        AffectCondition, 
+        on_delete=models.PROTECT,
+    )
     
     class Meta:
         unique_together = ('subject', 'condition')
@@ -72,5 +66,5 @@ class SelfReportScore(models.Model):
     worried_about_others_opinion = models.PositiveSmallIntegerField(choices=PANAS_SSSQ_SCALE, null=True, blank=True)
     concerned_about_impression = models.PositiveSmallIntegerField(choices=PANAS_SSSQ_SCALE, null=True, blank=True)
 
-    # def __str__(self):
-    #     return f"{self.subject.code} Report after {self.condition.name}"
+    def __str__(self):
+        return f"{self.subject.code} Report after {self.condition.name}"
