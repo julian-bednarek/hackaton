@@ -1,5 +1,6 @@
 from django.db import models
-from . import Subject, AffectCondition
+from .subject import Subject 
+from .affect_condition import AffectCondition
 
 PANAS_SSSQ_SCALE = [(i, str(i)) for i in range(1, 6)] 
 STAI_SCALE = [(i, str(i)) for i in range(1, 5)] 

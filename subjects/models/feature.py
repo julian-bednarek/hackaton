@@ -1,5 +1,5 @@
 from django.db import models
-from .subject import Subject
+from subjects.models import Subject
 from .affect_condition import AffectCondition
 
 class PhysiologicalFeature(models.Model):
