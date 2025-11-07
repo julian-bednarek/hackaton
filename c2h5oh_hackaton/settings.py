@@ -91,6 +91,7 @@ DATABASES = {
     }
 }
 
+DATA_DIR = os.path.join(BASE_DIR, 'WESAD/')
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators

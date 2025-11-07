@@ -16,9 +16,11 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
-from subjects.views import ImportDataAPIView
+from subjects.views.proces_pickle import ImportDataAPIView
+from subjects.views.import_subjects import ImportReadmeDataAPIView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/import-data/<str:subject_code>/', ImportDataAPIView.as_view(), name='import_data'),
+    path('api/import-readme/<str:subject_code>/', ImportReadmeDataAPIView.as_view(), name='import_readme'),
 ]

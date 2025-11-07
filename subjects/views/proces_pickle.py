@@ -3,9 +3,8 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
 from data_analysis.utils import WESADProcessor 
-from .models import Subject 
-
-DATA_DIR = '../WESAD/' 
+from subjects.models import Subject
+from django.conf import settings
 
 class ImportDataAPIView(APIView):
     """
@@ -24,7 +23,7 @@ class ImportDataAPIView(APIView):
             )
 
         # 2. Instantiate and process
-        processor = WESADProcessor(subject_code, DATA_DIR)
+        processor = WESADProcessor(subject_code, settings.DATA_DIR)
         success, message = processor.process()
         
         # 3. Return response
