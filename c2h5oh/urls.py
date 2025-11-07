@@ -1,5 +1,5 @@
 """
-URL configuration for c2h5oh_hackaton project.
+URL configuration for c2h5oh project.
 
 The `urlpatterns` list routes URLs to views. For more information please see:
     https://docs.djangoproject.com/en/5.2/topics/http/urls/
@@ -16,7 +16,9 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
+from .views import C2H5OHAppView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api/', C2H5OHAppView.as_view(), name='c2h5oh_app'),
 ]
