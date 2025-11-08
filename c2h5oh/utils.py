@@ -242,10 +242,12 @@ def process_pickle_data(data_dict):
         return final_song
 
 
-def load_pkl_data(filepath):
+def load_pkl_data(uploaded_file):
     try:
-        with open(filepath, "rb") as f:
-            return pickle.load(f, encoding="latin1")
+        # Method 1: Read directly from the uploaded file object
+        uploaded_file.seek(0)  # Reset file pointer to beginning
+        return pickle.load(uploaded_file, encoding="latin1")
+
     except Exception as e:
-        print(f"Error loading pickle file {filepath}: {e}")
+        print(f"Error loading pickle file: {e}")
         return None
