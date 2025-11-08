@@ -10,7 +10,10 @@ import os
 # Double-check this path matches exactly where your S2.pkl is located relative to this script
 INPUT_FILE = 'WESAD/S2/S2.pkl'
 OUTPUT_PREFIX = 'WESAD/S2'
-DATA_SAMPLING_RATE = 700
+DATA_SAMPLING_RATE_CHEST = 700  # Chest device sampling rate
+DATA_SAMPLING_RATE_WRIST_BVP = 64  # Wrist BVP sampling rate
+DATA_SAMPLING_RATE_WRIST_EDA = 4  # Wrist EDA/TEMP sampling rate
+DATA_SAMPLING_RATE_WRIST_ACC = 32  # Wrist ACC sampling rate
 SEGMENT_DURATION_SEC = 60
 warnings.filterwarnings('ignore')
 
@@ -80,6 +83,31 @@ def get_warmth_drone(temp_val_0_to_1, dur_ms=1000):
     volume = -35 + (temp_val_0_to_1 * 8)
     noise = WhiteNoise().to_audio_segment(duration=dur_ms).low_pass_filter(cutoff)
     return noise.apply_gain(volume).fade_in(500).fade_out(500)
+
+
+def get_pulse_bass(bvp_val_0_to_1, dur_ms=200):
+    # Bass sound driven by Blood Volume Pulse (wrist BVP sensor)
+    # Higher BVP = deeper/louder bass hit
+    base_freq = 40 + (bvp_val_0_to_1 * 30)  # 40-70 Hz range
+    bass = Sine(base_freq).to_audio_segment(duration=dur_ms)
+    # Add harmonics for richness
+    bass = bass.overlay(Sine(base_freq * 2).to_audio_segment(duration=dur_ms).apply_gain(-10))
+    volume = -20 + (bvp_val_0_to_1 * 15)
+    return bass.fade_in(10).fade_out(100).apply_gain(volume)
+
+
+def get_movement_percussion(acc_intensity_0_to_1, dur_ms=80):
+    # Percussive hit based on accelerometer movement
+    # More movement = brighter, louder percussion
+    if acc_intensity_0_to_1 < 0.1:
+        return AudioSegment.silent(duration=dur_ms)
+
+    freq = 200 + (acc_intensity_0_to_1 * 400)
+    perc = Sine(freq).to_audio_segment(duration=dur_ms)
+    noise = WhiteNoise().to_audio_segment(duration=dur_ms).high_pass_filter(3000)
+    combined = perc.overlay(noise.apply_gain(-15))
+    volume = -25 + (acc_intensity_0_to_1 * 20)
+    return combined.fade_out(50).apply_gain(volume)
 
 
 # --- 3. Logic & Generation ---
@@ -208,6 +236,135 @@ def generate_song_structure(ecg_rate, emg, eda, resp, temp, rate, total_sec):
     return full_mix
 
 
+def determine_musical_mode_wrist(hr_bpm, eda_norm, acc_intensity):
+    # Mode determination for wrist data (no EMG or respiration)
+    if hr_bpm < 75 and acc_intensity < 0.2:
+        return 'MEDITATION'
+    if hr_bpm > 85 and eda_norm > 0.4:
+        return 'STRESS'
+    if acc_intensity > 0.3:
+        return 'AMUSEMENT'
+    return 'BASELINE'
+
+
+def generate_wrist_song_structure(bvp_rate, eda, temp, acc, bvp_sampling_rate, eda_sampling_rate, acc_sampling_rate, total_sec):
+    """Generate music from wrist device sensors: BVP, EDA, TEMP, ACC
+
+    Sensor Mapping (consistent with chest):
+    - TEMP (wrist) → Temperature Drone (same as chest TEMP)
+    - EDA (wrist) → Guitar intensity (same as chest EDA)
+    - BVP (wrist) → Heart rate for tempo (same as chest ECG)
+    - ACC (wrist) → Replaces EMG for melody + adds movement percussion
+    """
+    print(f"--> Generating {total_sec}s of WRIST audio...")
+    full_mix = AudioSegment.silent(duration=total_sec * 1000)
+
+    current_time_ms = 0
+    beat_counter = 0
+    chord_idx = 0
+    last_melody_idx = 0
+    current_mode = 'BASELINE'
+
+    # Pre-load drum samples
+    kick, snare, hihat = get_kick(), get_snare(), get_hihat()
+
+    # --- Pre-process Signals ---
+    # Normalize EDA (0-1) - no cleaning due to low sampling rate
+    eda_norm = (eda - eda.min()) / (eda.max() - eda.min() + 0.001)
+    # Resample EDA to match BVP rate for easier indexing
+    eda_resampled = nk.signal_resample(eda_norm, sampling_rate=eda_sampling_rate, desired_sampling_rate=bvp_sampling_rate)
+
+    # Normalize Temperature (30C-37C range)
+    temp_norm = np.clip((temp - 30.0) / (37.0 - 30.0), 0.0, 1.0)
+    temp_resampled = nk.signal_resample(temp_norm, sampling_rate=eda_sampling_rate, desired_sampling_rate=bvp_sampling_rate)
+
+    # Calculate accelerometer magnitude (movement intensity) - replaces EMG for melody control
+    acc_magnitude = np.sqrt(np.sum(acc**2, axis=1))
+    acc_norm = (acc_magnitude - acc_magnitude.min()) / (acc_magnitude.max() - acc_magnitude.min() + 0.001)
+    acc_resampled = nk.signal_resample(acc_norm, sampling_rate=acc_sampling_rate, desired_sampling_rate=bvp_sampling_rate)
+
+    while current_time_ms < (total_sec * 1000) - 2000:
+        # Get bio-data snapshot
+        sec_idx = min(int((current_time_ms / 1000) * bvp_sampling_rate), len(bvp_rate) - 1)
+
+        # BVP controls tempo (same as ECG in chest)
+        cur_bpm = np.clip(bvp_rate[sec_idx], 60, 140)
+        ms_per_beat = 60000 / cur_bpm
+
+        cur_eda = eda_resampled[min(sec_idx, len(eda_resampled) - 1)]
+        cur_temp = temp_resampled[min(sec_idx, len(temp_resampled) - 1)]
+        cur_acc = acc_resampled[min(sec_idx, len(acc_resampled) - 1)]
+
+        # Determine mode every 4 beats (using ACC instead of EMG for movement)
+        if beat_counter % 4 == 0:
+            new_mode = determine_musical_mode_wrist(cur_bpm, cur_eda, cur_acc)
+            if new_mode != current_mode:
+                print(f"[{int(current_time_ms / 1000)}s] Wrist Mode: {current_mode} -> {new_mode} | HR: {cur_bpm:.0f}, Movement: {cur_acc:.2f}")
+                current_mode = new_mode
+
+        current_scale = SCALE_MAJOR
+
+        # Layer 1: Always-on Textures
+        # Temperature Drone (SAME as chest)
+        full_mix = full_mix.overlay(get_warmth_drone(cur_temp, dur_ms=ms_per_beat), position=current_time_ms)
+
+        # Layer 2: Mode-Specific Instruments
+        if current_mode == 'MEDITATION':
+            current_scale = SCALE_LYDIAN
+            # No drums. Sparse melody notes if movement detected (ACC replaces EMG role)
+            if beat_counter % 2 == 0 and cur_acc > 0.1:
+                note = get_piano_note(current_scale[last_melody_idx % 8], dur_ms=2500).apply_gain(-15)
+                full_mix = full_mix.overlay(note, position=current_time_ms)
+                last_melody_idx += 1
+
+        elif current_mode == 'STRESS':
+            current_scale = SCALE_MINOR_HARM
+            # Aggressive drums
+            full_mix = full_mix.overlay(kick.apply_gain(2), position=current_time_ms)
+            full_mix = full_mix.overlay(hihat, position=current_time_ms)
+            full_mix = full_mix.overlay(hihat.apply_gain(-5), position=current_time_ms + (ms_per_beat / 2))
+            if beat_counter % 2 == 1:
+                full_mix = full_mix.overlay(snare, position=current_time_ms)
+            # Distorted Guitar controlled by EDA (SAME as chest)
+            if beat_counter % 4 == 0:
+                guitar = get_guitar_chord(BASE_PROG[chord_idx % 4], cur_eda, dur_ms=ms_per_beat * 4)
+                full_mix = full_mix.overlay(guitar, position=current_time_ms)
+
+        elif current_mode == 'AMUSEMENT':
+            # Upbeat drums
+            if beat_counter % 4 == 0 or beat_counter % 4 == 2:
+                full_mix = full_mix.overlay(kick, position=current_time_ms)
+            if beat_counter % 4 == 1 or beat_counter % 4 == 3:
+                full_mix = full_mix.overlay(snare, position=current_time_ms)
+            full_mix = full_mix.overlay(hihat, position=current_time_ms + (ms_per_beat / 2))
+
+            # Active melody driven by ACC (replaces EMG from chest version)
+            if cur_acc > 0.15:
+                note = get_piano_note(current_scale[last_melody_idx % 8], dur_ms=300)
+                full_mix = full_mix.overlay(note, position=current_time_ms)
+                last_melody_idx += 1 if cur_acc > 0.4 else -1
+
+            # BONUS: Movement percussion (unique to wrist - extra layer showing movement)
+            if cur_acc > 0.3:
+                full_mix = full_mix.overlay(get_movement_percussion(cur_acc, dur_ms=int(ms_per_beat * 0.3)),
+                                           position=current_time_ms + int(ms_per_beat * 0.25))
+
+
+        else:  # BASELINE
+            if beat_counter % 4 == 0:
+                full_mix = full_mix.overlay(kick, position=current_time_ms)
+            if beat_counter % 4 == 2:
+                full_mix = full_mix.overlay(snare, position=current_time_ms)
+            full_mix = full_mix.overlay(hihat.apply_gain(-12), position=current_time_ms)
+
+        current_time_ms += ms_per_beat
+        beat_counter += 1
+        if beat_counter % 4 == 0:
+            chord_idx += 1
+
+    return full_mix
+
+
 # --- 4. Main ---
 def main():
     print(f"Starting up... attempting to load {INPUT_FILE}")
@@ -223,18 +380,27 @@ def main():
         return
 
     try:
-        # KEY CORRECTION HERE BASED ON YOUR DIAGNOSTIC OUTPUT
+        # Load CHEST data
         chest = data['signal']['chest']
-        ecg = chest['ECG'].flatten()
-        emg = chest['EMG'].flatten()
-        eda = chest['EDA'].flatten()
-        resp = chest['Resp'].flatten()  # Corrected from RESP
-        temp = chest['Temp'].flatten()  # Corrected from TEMP
+        chest_ecg = chest['ECG'].flatten()
+        chest_emg = chest['EMG'].flatten()
+        chest_eda = chest['EDA'].flatten()
+        chest_resp = chest['Resp'].flatten()
+        chest_temp = chest['Temp'].flatten()
+
+        # Load WRIST data
+        wrist = data['signal']['wrist']
+        wrist_bvp = wrist['BVP'].flatten()
+        wrist_eda = wrist['EDA'].flatten()
+        wrist_temp = wrist['TEMP'].flatten()
+        wrist_acc = wrist['ACC']  # 3D array
+
         labels = data['label'].flatten()
-        print("✅ Data keys found and signals loaded.")
+        print("✅ Chest and Wrist data loaded successfully!")
+        print(f"   Chest signals at {DATA_SAMPLING_RATE_CHEST} Hz")
+        print(f"   Wrist BVP at {DATA_SAMPLING_RATE_WRIST_BVP} Hz, EDA/TEMP at {DATA_SAMPLING_RATE_WRIST_EDA} Hz")
     except KeyError as e:
-        print(f"❌ missing key in data structure: {e}")
-        print("Double check standard WESAD keys: ECG, EMG, EDA, Resp, Temp")
+        print(f"❌ Missing key in data structure: {e}")
         return
 
     # WESAD Label IDs
@@ -245,59 +411,99 @@ def main():
         'meditation': 4
     }
 
-    samples_needed = SEGMENT_DURATION_SEC * DATA_SAMPLING_RATE
+    # Ensure output directory exists
+    os.makedirs(os.path.dirname(OUTPUT_PREFIX) if os.path.dirname(OUTPUT_PREFIX) else '.', exist_ok=True)
 
     for label_name, label_id in segments_to_process.items():
-        print(f"\n--- finding {label_name.upper()} segment (ID: {label_id}) ---")
+        print(f"\n{'='*60}")
+        print(f"PROCESSING {label_name.upper()} SEGMENT (ID: {label_id})")
+        print(f"{'='*60}")
+
         indices = np.where(labels == label_id)[0]
 
         if len(indices) == 0:
-            print(f"Warning: No data found for {label_name}")
+            print(f"⚠️ Warning: No data found for {label_name}")
             continue
 
         # Take the middle of the condition to ensure stable data
         mid_point_idx = len(indices) // 2
-        start_index = indices[mid_point_idx]
-        end_index = start_index + samples_needed
+        chest_start = indices[mid_point_idx]
+        chest_end = chest_start + (SEGMENT_DURATION_SEC * DATA_SAMPLING_RATE_CHEST)
 
-        if end_index > len(ecg):
-            print("Not enough data remaining for a full segment.")
+        if chest_end > len(chest_ecg):
+            print("⚠️ Not enough chest data for full segment.")
             continue
 
-        print(f"Processing {SEGMENT_DURATION_SEC}s segment...")
+        # ===== CHEST DEVICE PROCESSING =====
+        print(f"\n[CHEST] Processing {SEGMENT_DURATION_SEC}s from chest device...")
 
-        # 1. Calculate HR for this specific segment first
-        ecg_segment = ecg[start_index:end_index]
-        ecg_clean = nk.ecg_clean(ecg_segment, sampling_rate=DATA_SAMPLING_RATE)
+        ecg_segment = chest_ecg[chest_start:chest_end]
+        ecg_clean = nk.ecg_clean(ecg_segment, sampling_rate=DATA_SAMPLING_RATE_CHEST)
+
         try:
-            # Find peaks and calculate rate
-            _, rpeaks = nk.ecg_peaks(ecg_clean, sampling_rate=DATA_SAMPLING_RATE)
-            ecg_rate = nk.signal_rate(rpeaks, sampling_rate=DATA_SAMPLING_RATE, desired_length=len(ecg_segment))
+            _, rpeaks = nk.ecg_peaks(ecg_clean, sampling_rate=DATA_SAMPLING_RATE_CHEST)
+            ecg_rate = nk.signal_rate(rpeaks, sampling_rate=DATA_SAMPLING_RATE_CHEST, desired_length=len(ecg_segment))
+
+            chest_song = generate_song_structure(
+                ecg_rate=ecg_rate,
+                emg=chest_emg[chest_start:chest_end],
+                eda=chest_eda[chest_start:chest_end],
+                resp=chest_resp[chest_start:chest_end],
+                temp=chest_temp[chest_start:chest_end],
+                rate=DATA_SAMPLING_RATE_CHEST,
+                total_sec=SEGMENT_DURATION_SEC
+            )
+
+            chest_output = f"{OUTPUT_PREFIX}_{label_name}_chest.wav"
+            chest_song.export(chest_output, format="wav")
+            print(f"🎹 CHEST audio saved: {chest_output}")
         except Exception as e:
-            print(f"Could not extract Heart Rate for this segment: {e}")
+            print(f"❌ Error processing chest data: {e}")
+
+        # ===== WRIST DEVICE PROCESSING =====
+        print(f"\n[WRIST] Processing {SEGMENT_DURATION_SEC}s from wrist device...")
+
+        # Calculate corresponding wrist indices (different sampling rates!)
+        wrist_bvp_start = int(chest_start * DATA_SAMPLING_RATE_WRIST_BVP / DATA_SAMPLING_RATE_CHEST)
+        wrist_bvp_end = wrist_bvp_start + (SEGMENT_DURATION_SEC * DATA_SAMPLING_RATE_WRIST_BVP)
+
+        wrist_eda_start = int(chest_start * DATA_SAMPLING_RATE_WRIST_EDA / DATA_SAMPLING_RATE_CHEST)
+        wrist_eda_end = wrist_eda_start + (SEGMENT_DURATION_SEC * DATA_SAMPLING_RATE_WRIST_EDA)
+
+        wrist_acc_start = int(chest_start * DATA_SAMPLING_RATE_WRIST_ACC / DATA_SAMPLING_RATE_CHEST)
+        wrist_acc_end = wrist_acc_start + (SEGMENT_DURATION_SEC * DATA_SAMPLING_RATE_WRIST_ACC)
+
+        if wrist_bvp_end > len(wrist_bvp) or wrist_eda_end > len(wrist_eda):
+            print("⚠️ Not enough wrist data for full segment.")
             continue
 
-        # 2. Generate Song with all sensors
-        final_song = generate_song_structure(
-            ecg_rate=ecg_rate,
-            emg=emg[start_index:end_index],
-            eda=eda[start_index:end_index],
-            resp=resp[start_index:end_index],
-            temp=temp[start_index:end_index],
-            rate=DATA_SAMPLING_RATE,
-            total_sec=SEGMENT_DURATION_SEC
-        )
-
-        # 3. Export
-        output_filename = f"{OUTPUT_PREFIX}_{label_name}_full_bio.wav"
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(OUTPUT_PREFIX), exist_ok=True)
-
         try:
-            final_song.export(output_filename, format="wav")
-            print(f"🎹 Success! Saved to: {output_filename}")
+            # Extract BVP heart rate
+            bvp_segment = wrist_bvp[wrist_bvp_start:wrist_bvp_end]
+            bvp_clean = nk.ppg_clean(bvp_segment, sampling_rate=DATA_SAMPLING_RATE_WRIST_BVP)
+            _, bvp_peaks = nk.ppg_peaks(bvp_clean, sampling_rate=DATA_SAMPLING_RATE_WRIST_BVP)
+            bvp_rate = nk.signal_rate(bvp_peaks, sampling_rate=DATA_SAMPLING_RATE_WRIST_BVP, desired_length=len(bvp_segment))
+
+            wrist_song = generate_wrist_song_structure(
+                bvp_rate=bvp_rate,
+                eda=wrist_eda[wrist_eda_start:wrist_eda_end],
+                temp=wrist_temp[wrist_eda_start:wrist_eda_end],
+                acc=wrist_acc[wrist_acc_start:wrist_acc_end],
+                bvp_sampling_rate=DATA_SAMPLING_RATE_WRIST_BVP,
+                eda_sampling_rate=DATA_SAMPLING_RATE_WRIST_EDA,
+                acc_sampling_rate=DATA_SAMPLING_RATE_WRIST_ACC,
+                total_sec=SEGMENT_DURATION_SEC
+            )
+
+            wrist_output = f"{OUTPUT_PREFIX}_{label_name}_wrist.wav"
+            wrist_song.export(wrist_output, format="wav")
+            print(f"🎹 WRIST audio saved: {wrist_output}")
         except Exception as e:
-            print(f"❌ Could not export audio (did you install ffmpeg?): {e}")
+            print(f"❌ Error processing wrist data: {e}")
+
+    print(f"\n{'='*60}")
+    print("✅ ALL PROCESSING COMPLETE!")
+    print(f"{'='*60}")
 
 
 if __name__ == "__main__":
