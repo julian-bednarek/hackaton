@@ -17,10 +17,9 @@ Including another URLconf
 
 from django.contrib import admin
 from django.urls import path
-from .views import C2H5OHAppView, OpenAIView
+from .views import C2H5OHAppView
 
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/", C2H5OHAppView.as_view(), name="c2h5oh_app"),
-    path("api/chat/", OpenAIView.as_view(), name="openai"),
 ]

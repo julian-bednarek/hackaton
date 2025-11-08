@@ -72,8 +72,6 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "c2h5oh.wsgi.application"
 
-OPEN_AI_API_KEY = os.environ.get("OPEN_AI_API_KEY", "")
-
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases

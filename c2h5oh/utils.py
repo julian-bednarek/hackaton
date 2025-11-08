@@ -172,7 +172,6 @@ def generate_song_structure(ecg_rate, emg, rate, total_sec):
 # --- 4. Main (MODIFIED) ---
 
 
-@shared_task
 def process_pickle_data(data_dict):
     data = load_pkl_data(data_dict)
     if data is None:
