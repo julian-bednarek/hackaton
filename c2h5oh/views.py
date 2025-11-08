@@ -3,46 +3,22 @@ from rest_framework.response import Response
 from rest_framework import status
 from celery.result import AsyncResult
 from .utils import process_pickle_data
+from openai import OpenAI
+from django.conf import settings
+from io import BytesIO
+from django.http import FileResponse
+import json
+
 
 class C2H5OHAppView(APIView):
-    def get(self, request):
-        task_id = request.query_params.get("task_id")
-        if not task_id:
-            return Response({"message": "C2H5OH App is running!"}, status=status.HTTP_200_OK)
-        result = AsyncResult(task_id)
-        if result.state == "PENDING":
-            return Response(
-                {"task_id": task_id, "status": "pending"},
-                status=status.HTTP_202_ACCEPTED
-            )
-        elif result.state == "STARTED":
-            return Response(
-                {"task_id": task_id, "status": "in progress"},
-                status=status.HTTP_202_ACCEPTED
-            )
-        elif result.state == "SUCCESS":
-            return Response(
-                {
-                    "task_id": task_id,
-                    "status": "completed",
-                    "result": result.result
-                },
-                status=status.HTTP_200_OK
-            )
-        elif result.state == "FAILURE":
-            return Response(
-                {
-                    "task_id": task_id,
-                    "status": "failed",
-                    "error": str(result.info)
-                },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-        else:
-            return Response(
-                {"task_id": task_id, "status": result.state},
-                status=status.HTTP_202_ACCEPTED
-            )
+
+    http_method_names = ["post", "options"]
+
+    def _add_cors_headers(self, response):
+        response["Access-Control-Allow-Origin"] = "*"
+        response["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        return response
 
     def _validate_file(self, file_obj):
         if not file_obj:
@@ -54,13 +30,21 @@ class C2H5OHAppView(APIView):
         file_obj = request.FILES.get("file")
         try:
             self._validate_file(file_obj)
-            task_id = process_pickle_data(file_obj)
+            audio_segment = process_pickle_data(file_obj)  # Returns AudioSegment
+            wav_buffer = BytesIO()
+            audio_segment.export(wav_buffer, format="wav")
+            wav_buffer.seek(0)
+            response = FileResponse(
+                wav_buffer,
+                as_attachment=True,
+                filename="processed_audio.wav",
+                content_type="audio/wav",
+            )
+            return self._add_cors_headers(response)
         except ValueError as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
-            return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        return Response(
-            {"message": "Task started successfully!", "task_id": task_id},
-            status=status.HTTP_202_ACCEPTED
-        )
+            return Response(
+                {"error": "An unexpected error occurred: " + str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
